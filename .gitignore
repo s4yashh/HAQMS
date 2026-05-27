@@ -1,0 +1,33 @@
+node_modules
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs
+dist
+build
+.next
+out
+coverage
+
+# Prisma
+backend/prisma/dev.db
+backend/prisma/dev.db-journal
+
+# Caches
+.cache
+.eslintcache
+.turbo
+
+# OS/editor
+.DS_Store
+.idea
