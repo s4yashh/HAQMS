@@ -19,12 +19,10 @@ export default function Dashboard() {
     if (!user) {
       router.push('/login');
     }
-  }, [user]);
-
-  if (!user) return null;
+  }, [user, router]);
 
   // Global State
-  const [activeTab, setActiveTab] = useState(user.role === 'ADMIN' ? 'reports' : user.role === 'RECEPTIONIST' ? 'patients' : 'appointments');
+  const [activeTab, setActiveTab] = useState('appointments');
 
   // ==========================================
   // STATE FOR RECEPTIONIST WORKFLOWS
@@ -32,6 +30,7 @@ export default function Dashboard() {
   const [patients, setPatients] = useState([]);
   const [patientsLoading, setPatientsLoading] = useState(false);
   const [patientSearch, setPatientSearch] = useState('');
+  const [debouncedPatientSearch, setDebouncedPatientSearch] = useState('');
   const [patientGender, setPatientGender] = useState('All');
   const [patientsPagination, setPatientsPagination] = useState({ page: 1, totalPages: 1 });
   
@@ -66,6 +65,13 @@ export default function Dashboard() {
   const [adminReportData, setAdminReportData] = useState(null);
   const [adminReportLoading, setAdminReportLoading] = useState(false);
   const [adminSearchQuery, setAdminSearchQuery] = useState('');
+  const [debouncedAdminSearchQuery, setDebouncedAdminSearchQuery] = useState('');
+
+  useEffect(() => {
+    if (!user) return;
+    const nextTab = user.role === 'ADMIN' ? 'reports' : user.role === 'RECEPTIONIST' ? 'patients' : 'appointments';
+    setActiveTab(nextTab);
+  }, [user]);
 
   // ==========================================
   // RECEPTIONIST FUNCTIONS
@@ -76,7 +82,7 @@ export default function Dashboard() {
     setPatientsLoading(true);
     try {
       // Inefficient memory pagination called from client
-      const res = await fetch(`${API_BASE_URL}/patients?page=${page}&limit=5&search=${patientSearch}&gender=${patientGender}`, {
+      const res = await fetch(`${API_BASE_URL}/patients?page=${page}&limit=5&search=${debouncedPatientSearch}&gender=${patientGender}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await res.json();
@@ -97,14 +103,24 @@ export default function Dashboard() {
 
   // Trigger Patient List Fetch (Every keystroke trigger re-renders parent! - Performance bug)
   useEffect(() => {
+    if (!user) return;
     if (user.role === 'RECEPTIONIST' || user.role === 'ADMIN') {
       fetchPatients(1);
     }
-  }, [patientSearch, patientGender]);
+  }, [debouncedPatientSearch, patientGender]);
+
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      setDebouncedPatientSearch(patientSearch.trim());
+    }, 300);
+
+    return () => clearTimeout(timeoutId);
+  }, [patientSearch]);
 
   // Fetch Doctors for booking drop-down
   const fetchDoctorsDropdown = async () => {
     try {
+      if (!token) return;
       const res = await fetch(`${API_BASE_URL}/doctors`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -117,7 +133,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchDoctorsDropdown();
-  }, []);
+  }, [token]);
 
   // Handle Patient Registration
   const handleRegisterPatient = async (e) => {
@@ -281,10 +297,11 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    if (!user) return;
     if (user.role === 'DOCTOR' && doctorsList.length > 0) {
       fetchDoctorWorklist();
     }
-  }, [doctorsList]);
+  }, [doctorsList, user]);
 
   // Update token status (WAITING -> CALLING -> COMPLETED / SKIPPED)
   const handleUpdateQueueStatus = async (tokenId, newStatus) => {
@@ -350,7 +367,8 @@ export default function Dashboard() {
   // Search Doctors (SQL Injection vulnerable API!)
   const searchPhysiciansAdmin = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/doctors?search=${adminSearchQuery}`, {
+      const searchValue = debouncedAdminSearchQuery || adminSearchQuery;
+      const res = await fetch(`${API_BASE_URL}/doctors?search=${searchValue}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await res.json();
@@ -363,6 +381,16 @@ export default function Dashboard() {
       console.error(e);
     }
   };
+
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      setDebouncedAdminSearchQuery(adminSearchQuery.trim());
+    }, 300);
+
+    return () => clearTimeout(timeoutId);
+  }, [adminSearchQuery]);
+
+  if (!user) return null;
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -894,7 +922,7 @@ export default function Dashboard() {
                       without optional chaining! If medicalHistory is null (which is the case for Batman, Clark Kent, etc.),
                       this code throws: "Cannot read properties of null (reading 'toUpperCase')" and crashes the app! */}
                   <p className="text-slate-700 dark:text-slate-300 leading-5 text-sm font-semibold">
-                    {selectedPatientHistory.medicalHistory.toUpperCase()}
+                    {selectedPatientHistory.medicalHistory?.toUpperCase() || 'No medical history on file.'}
                   </p>
                 </div>
 
@@ -1088,8 +1116,8 @@ export default function Dashboard() {
         )}
 
         {/* ==============================================================
-            TAB: PHYSICIAN REGISTRY (ADMIN ROLE - SQL INJECTION VULNERABILITY)
-            ============================================================== */}
+          TAB: PHYSICIAN REGISTRY (ADMIN ROLE)
+          ============================================================== */}
         {activeTab === 'physicians' && (
           <div className="glass p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-md space-y-6">
             <div>
@@ -1098,7 +1126,7 @@ export default function Dashboard() {
                 Staff Physicians Registry Lookup
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 font-semibold mt-1">
-                Database lookup for credentials. Uses a raw SQL interpolation backend query.
+                Search physicians by name using a safe, parameterized backend query.
               </p>
             </div>
 
@@ -1111,7 +1139,7 @@ export default function Dashboard() {
                   type="text"
                   value={adminSearchQuery}
                   onChange={(e) => setAdminSearchQuery(e.target.value)}
-                  placeholder="Enter physician name search criteria (raw syntax supported)..."
+                  placeholder="Enter physician name"
                   className="block w-full pl-9 pr-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
                 />
               </div>
@@ -1120,18 +1148,14 @@ export default function Dashboard() {
                 onClick={searchPhysiciansAdmin}
                 className="glow-btn px-5 py-2 bg-slate-900 text-white dark:bg-teal-500 dark:text-slate-950 font-bold text-xs rounded-lg hover:bg-slate-800 dark:hover:bg-teal-400 transition-colors"
               >
-                Execute SQL Query
+                Search
               </button>
             </div>
 
-            <div className="p-3 bg-rose-500/10 text-rose-500 text-xs rounded-lg border border-rose-500/20 font-semibold leading-5 flex gap-3">
+            <div className="p-3 bg-emerald-500/10 text-emerald-600 text-xs rounded-lg border border-emerald-500/20 font-semibold leading-5 flex gap-3">
               <ShieldAlert className="h-5 w-5 shrink-0" />
               <div>
-                <strong>SQL Vulnerability alert:</strong> This search executes raw interpolation: 
-                <code className="block bg-black/10 dark:bg-black/30 p-1.5 rounded mt-1 font-mono">
-                  SELECT * FROM &quot;Doctor&quot; WHERE name ILIKE &apos;%&#123;query&#125;%&apos;
-                </code>
-                Can be audited by inputting standard SQL injection strings to leak full user login lists.
+                <strong>Security note:</strong> This search now uses safe, parameterized queries on the backend.
               </div>
             </div>
 
@@ -1146,8 +1170,8 @@ export default function Dashboard() {
                     <span className="inline-flex px-2 py-0.5 rounded text-xxs font-extrabold tracking-wide uppercase bg-teal-500/10 text-teal-600 dark:text-teal-400 mb-2">
                       {doc.department}
                     </span>
-                    <h4 className="font-extrabold text-slate-800 dark:text-slate-100">{doc.name}</h4>
-                    <p className="text-xs text-slate-400 mt-0.5">{doc.specialization}</p>
+                    <h4 className="font-extrabold text-slate-900 dark:text-black drop-shadow-sm">{doc.name}</h4>
+                    <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5">{doc.specialization}</p>
                   </div>
                   <div className="mt-6 pt-3 border-t border-slate-200 dark:border-slate-800/80 flex justify-between items-center text-xs font-semibold text-slate-500">
                     <span>Exp: {doc.experience} yrs</span>
