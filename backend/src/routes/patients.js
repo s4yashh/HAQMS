@@ -10,49 +10,42 @@ const prisma = new PrismaClient();
 router.get('/', authenticate, async (req, res) => {
   try {
     const { search, gender } = req.query;
-    
-    // Inefficient: Retrieve all matching rows without take/skip limits from the database.
-    // Scales poorly as patient directory grows.
-    const allPatients = await prisma.patient.findMany({
-      orderBy: { createdAt: 'desc' },
-    });
-
-    let filteredPatients = allPatients;
-
-    // In-memory filter for search (checks name/phone/email)
-    if (search) {
-      const query = search.toLowerCase();
-      filteredPatients = filteredPatients.filter(
-        (p) =>
-          p.name.toLowerCase().includes(query) ||
-          p.phoneNumber.includes(query) ||
-          (p.email && p.email.toLowerCase().includes(query))
-      );
-    }
-
-    // In-memory filter for gender
-    if (gender && gender !== 'All') {
-      filteredPatients = filteredPatients.filter(
-        (p) => p.gender.toLowerCase() === gender.toLowerCase()
-      );
-    }
-
-    // In-memory pagination setup
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 5;
     const offset = (page - 1) * limit;
-    
-    const paginatedResult = filteredPatients.slice(offset, offset + limit);
-    const totalPages = Math.ceil(filteredPatients.length / limit);
 
-    // Inconsistent Response style
+    const where = {};
+    if (search) {
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { phoneNumber: { contains: search } },
+        { email: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    if (gender && gender !== 'All') {
+      where.gender = { equals: gender, mode: 'insensitive' };
+    }
+
+    const [patients, totalPatients] = await Promise.all([
+      prisma.patient.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: offset,
+        take: limit,
+      }),
+      prisma.patient.count({ where }),
+    ]);
+
+    const totalPages = Math.ceil(totalPatients / limit) || 1;
+
     res.json({
       success: true,
-      patients: paginatedResult,
+      patients,
       pagination: {
         page,
         limit,
-        totalPatients: filteredPatients.length,
+        totalPatients,
         totalPages,
       },
     });
@@ -69,7 +62,18 @@ router.get('/:id', authenticate, async (req, res) => {
     const patient = await prisma.patient.findUnique({
       where: { id: req.params.id },
       include: {
-        appointments: true, // Fetching relation direct
+        appointments: {
+          include: {
+            doctor: { select: { id: true, name: true, specialization: true, department: true } },
+          },
+          orderBy: { appointmentDate: 'desc' },
+        },
+        queueTokens: {
+          include: {
+            doctor: { select: { id: true, name: true, specialization: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+        },
       },
     });
 
