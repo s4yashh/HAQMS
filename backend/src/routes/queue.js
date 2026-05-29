@@ -43,42 +43,36 @@ router.post('/checkin', authenticate, async (req, res) => {
       return res.status(400).json({ error: 'Patient and Doctor ID are required for check-in.' });
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const queueDate = new Date();
+    queueDate.setHours(0, 0, 0, 0);
 
-    // 1. Fetch current maximum token number for this doctor today
-    const maxTokenResult = await prisma.queueToken.aggregate({
-      where: {
-        doctorId,
-        createdAt: { gte: today },
-      },
-      _max: {
-        tokenNumber: true,
-      },
-    });
+    const newToken = await prisma.$transaction(
+      async (tx) => {
+        const latestToken = await tx.queueToken.findFirst({
+          where: { doctorId, queueDate },
+          orderBy: { tokenNumber: 'desc' },
+          select: { tokenNumber: true },
+        });
 
-    const currentMax = maxTokenResult._max.tokenNumber || 0;
-    const nextTokenNumber = currentMax + 1;
+        const nextTokenNumber = (latestToken?.tokenNumber || 0) + 1;
 
-    // PERFORMANCE/CONCURRENCY BUG: Artificial sleep to widen the race condition window.
-    // In production under microservices or high load, network delay does this naturally.
-    // Junior developer comment: "Adding sleep to make sure db registers the record correctly before moving forward"
-    await new Promise((resolve) => setTimeout(resolve, 350));
-
-    // 2. Insert new token
-    const newToken = await prisma.queueToken.create({
-      data: {
-        tokenNumber: nextTokenNumber,
-        patientId,
-        doctorId,
-        appointmentId: appointmentId || null,
-        status: 'WAITING',
+        return tx.queueToken.create({
+          data: {
+            tokenNumber: nextTokenNumber,
+            patientId,
+            doctorId,
+            appointmentId: appointmentId || null,
+            status: 'WAITING',
+            queueDate,
+          },
+          include: {
+            patient: true,
+            doctor: true,
+          },
+        });
       },
-      include: {
-        patient: true,
-        doctor: true,
-      },
-    });
+      { isolationLevel: 'Serializable' }
+    );
 
     res.status(201).json({
       message: 'Checked in successfully. Token generated.',
@@ -86,7 +80,10 @@ router.post('/checkin', authenticate, async (req, res) => {
     });
   } catch (error) {
     console.error('Queue check-in error:', error);
-    res.status(500).json({ error: 'Check-in failed', details: error.message });
+    if (error.code === 'P2002') {
+      return res.status(409).json({ error: 'Duplicate token generated. Please retry.' });
+    }
+    res.status(500).json({ error: 'Check-in failed' });
   }
 });
 
